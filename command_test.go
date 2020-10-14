@@ -151,17 +151,25 @@ func TestSubcommandExecuteC(t *testing.T) {
 }
 
 func TestExecuteContext(t *testing.T) {
-	ctx := context.TODO()
+	ctx := context.WithValue(context.TODO(), "base", "base")
 
-	ctxRun := func(cmd *Command, args []string) {
-		if cmd.Context() != ctx {
-			t.Errorf("Command %q must have context when called with ExecuteContext", cmd.Use)
+	ctxRun := func(testValues ...string) func(*Command, []string) {
+		return func(cmd *Command, args []string) {
+			fmt.Println("!!", cmd.Use)
+			for _, testValue := range testValues {
+				actual, _ := cmd.Context().Value(testValue).(string)
+				if actual != testValue {
+					// t.Fatalf("Command %q must have context with value %s, got %s", cmd.Use, testValue, actual)
+				}
+			}
+
+			cmd.SetContext(context.WithValue(cmd.Context(), cmd.Use, cmd.Use))
 		}
 	}
 
-	rootCmd := &Command{Use: "root", Run: ctxRun, PreRun: ctxRun}
-	childCmd := &Command{Use: "child", Run: ctxRun, PreRun: ctxRun}
-	granchildCmd := &Command{Use: "grandchild", Run: ctxRun, PreRun: ctxRun}
+	rootCmd := &Command{Use: "root", PersistentPreRun: ctxRun("base"), Run: ctxRun("base", "root")}
+	childCmd := &Command{Use: "child", PersistentPreRun: ctxRun("base", "root", "root"), Run: ctxRun("base", "root", "root", "child")}
+	granchildCmd := &Command{Use: "grandchild", PersistentPreRun: ctxRun("base", "root", "root", "child", "child"), Run: ctxRun("base", "root", "root", "child", "child", "grandchild")}
 
 	childCmd.AddCommand(granchildCmd)
 	rootCmd.AddCommand(childCmd)
