@@ -3,6 +3,7 @@ package cobra
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -1334,7 +1335,8 @@ func TestPersistentHooks(t *testing.T) {
 	)
 
 	parentCmd := &Command{
-		Use: "parent",
+		Use:                   "parent",
+		TraverseChildrenHooks: false, // Set explicitly to highlight setting.
 		PersistentPreRun: func(_ *Command, args []string) {
 			parentPersPreArgs = strings.Join(args, " ")
 		},
@@ -1380,10 +1382,6 @@ func TestPersistentHooks(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 
-	// TODO: currently PersistenPreRun* defined in parent does not
-	// run if the matchin child subcommand has PersistenPreRun.
-	// If the behavior changes (https://github.com/spf13/cobra/issues/252)
-	// this test must be fixed.
 	if parentPersPreArgs != "" {
 		t.Errorf("Expected blank parentPersPreArgs, got %q", parentPersPreArgs)
 	}
@@ -1396,10 +1394,7 @@ func TestPersistentHooks(t *testing.T) {
 	if parentPostArgs != "" {
 		t.Errorf("Expected blank parentPostArgs, got %q", parentPostArgs)
 	}
-	// TODO: currently PersistenPostRun* defined in parent does not
-	// run if the matchin child subcommand has PersistenPostRun.
-	// If the behavior changes (https://github.com/spf13/cobra/issues/252)
-	// this test must be fixed.
+
 	if parentPersPostArgs != "" {
 		t.Errorf("Expected blank parentPersPostArgs, got %q", parentPersPostArgs)
 	}
@@ -1418,6 +1413,254 @@ func TestPersistentHooks(t *testing.T) {
 	}
 	if childPersPostArgs != "one two" {
 		t.Errorf("Expected childPersPostArgs %q, got %q", "one two", childPersPostArgs)
+	}
+}
+
+func TestPersistentHooks_TraverseChildrenHooks(t *testing.T) {
+	var (
+		parentPersPreArgs  string
+		parentPreArgs      string
+		parentRunArgs      string
+		parentPostArgs     string
+		parentPersPostArgs string
+	)
+
+	var (
+		childPersPreArgs  string
+		childPreArgs      string
+		childRunArgs      string
+		childPostArgs     string
+		childPersPostArgs string
+	)
+
+	parentCmd := &Command{
+		Use:                   "parent",
+		TraverseChildrenHooks: true,
+		PersistentPreRun: func(_ *Command, args []string) {
+			parentPersPreArgs = strings.Join(args, " ")
+		},
+		PreRun: func(_ *Command, args []string) {
+			parentPreArgs = strings.Join(args, " ")
+		},
+		Run: func(_ *Command, args []string) {
+			parentRunArgs = strings.Join(args, " ")
+		},
+		PostRun: func(_ *Command, args []string) {
+			parentPostArgs = strings.Join(args, " ")
+		},
+		PersistentPostRun: func(_ *Command, args []string) {
+			parentPersPostArgs = strings.Join(args, " ")
+		},
+	}
+
+	childCmd := &Command{
+		Use: "child",
+		PersistentPreRun: func(_ *Command, args []string) {
+			childPersPreArgs = strings.Join(args, " ")
+		},
+		PreRun: func(_ *Command, args []string) {
+			childPreArgs = strings.Join(args, " ")
+		},
+		Run: func(_ *Command, args []string) {
+			childRunArgs = strings.Join(args, " ")
+		},
+		PostRun: func(_ *Command, args []string) {
+			childPostArgs = strings.Join(args, " ")
+		},
+		PersistentPostRun: func(_ *Command, args []string) {
+			childPersPostArgs = strings.Join(args, " ")
+		},
+	}
+	parentCmd.AddCommand(childCmd)
+
+	output, err := executeCommand(parentCmd, "child", "one", "two")
+	if output != "" {
+		t.Errorf("Unexpected output: %v", output)
+	}
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if parentPersPreArgs != "one two" {
+		t.Errorf("Expected parentPersPreArgs %q, got %q", "one two", parentPersPreArgs)
+	}
+	if parentPreArgs != "" {
+		t.Errorf("Expected blank parentPreArgs, got %q", parentPreArgs)
+	}
+	if parentRunArgs != "" {
+		t.Errorf("Expected blank parentRunArgs, got %q", parentRunArgs)
+	}
+	if parentPostArgs != "" {
+		t.Errorf("Expected blank parentPostArgs, got %q", parentPostArgs)
+	}
+	if parentPersPostArgs != "one two" {
+		t.Errorf("Expected parentPersPostArgs %q, got %q", "one two", parentPersPostArgs)
+	}
+
+	if childPersPreArgs != "one two" {
+		t.Errorf("Expected childPersPreArgs %q, got %q", "one two", childPersPreArgs)
+	}
+	if childPreArgs != "one two" {
+		t.Errorf("Expected childPreArgs %q, got %q", "one two", childPreArgs)
+	}
+	if childRunArgs != "one two" {
+		t.Errorf("Expected childRunArgs %q, got %q", "one two", childRunArgs)
+	}
+	if childPostArgs != "one two" {
+		t.Errorf("Expected childPostArgs %q, got %q", "one two", childPostArgs)
+	}
+	if childPersPostArgs != "one two" {
+		t.Errorf("Expected childPersPostArgs %q, got %q", "one two", childPersPostArgs)
+	}
+}
+
+func TestPersistentHooks_persistentPostRun_ordering(t *testing.T) {
+	var uses []string
+	nopRun := func(*Command, []string) {}
+	printRun := func(name string) func(*Command, []string) {
+		return func(cmd *Command, args []string) {
+			uses = append(uses, name)
+		}
+	}
+
+	rootCmd := &Command{
+		Use:                   "root",
+		TraverseChildrenHooks: true,
+		Run:                   nopRun,
+		PersistentPostRun:     printRun("root"),
+	}
+	childCmd := &Command{
+		Use:               "child",
+		Run:               nopRun,
+		PersistentPostRun: printRun("child"),
+	}
+	granchildCmd := &Command{
+		Use:               "grandchild",
+		Run:               nopRun,
+		PersistentPostRun: printRun("grandchild"),
+	}
+
+	childCmd.AddCommand(granchildCmd)
+	rootCmd.AddCommand(childCmd)
+	executeCommand(rootCmd, "child", "grandchild")
+
+	if !reflect.DeepEqual(uses, []string{"grandchild", "child", "root"}) {
+		t.Fatalf("incorrect ordering: %v", uses)
+	}
+}
+
+func TestPersistentHooks_errs(t *testing.T) {
+	nopRun := func(*Command, []string) {}
+
+	testCases := []struct {
+		name        string
+		setup       func() *Command
+		args        []string
+		expectedErr error
+	}{
+		{
+			name:        "PersistentPreRunE",
+			expectedErr: errors.New("some-error"),
+			args:        []string{"child"},
+			setup: func() *Command {
+				parentCmd := &Command{
+					Use:                   "parent",
+					TraverseChildrenHooks: true,
+					PersistentPreRunE: func(_ *Command, args []string) error {
+						return errors.New("some-error")
+					},
+					Run: nopRun,
+				}
+				childCmd := &Command{
+					Use: "child",
+					Run: nopRun,
+					PersistentPreRunE: func(_ *Command, args []string) error {
+						t.Fatal("should not be invoked")
+						return nil
+					},
+				}
+				parentCmd.AddCommand(childCmd)
+
+				return parentCmd
+			},
+		},
+		{
+			name:        "PersistentPostRunE",
+			expectedErr: errors.New("some-error"),
+			args:        []string{"child"},
+			setup: func() *Command {
+				parentCmd := &Command{
+					Use:                   "parent",
+					TraverseChildrenHooks: true,
+					PersistentPostRunE: func(_ *Command, args []string) error {
+						t.Fatal("should not be invoked")
+						return nil
+					},
+					Run: nopRun,
+				}
+				childCmd := &Command{
+					Use: "child",
+					Run: nopRun,
+					PersistentPostRunE: func(_ *Command, args []string) error {
+						return errors.New("some-error")
+					},
+				}
+				parentCmd.AddCommand(childCmd)
+
+				return parentCmd
+			},
+		},
+		{
+			name:        "PreRunE",
+			expectedErr: errors.New("some-error"),
+			args:        []string{"parent"},
+			setup: func() *Command {
+				return &Command{
+					Use: "parent",
+					PreRunE: func(_ *Command, args []string) error {
+						return errors.New("some-error")
+					},
+					Run: nopRun,
+				}
+			},
+		},
+		{
+			name:        "RunE",
+			expectedErr: errors.New("some-error"),
+			args:        []string{"parent"},
+			setup: func() *Command {
+				return &Command{
+					Use: "parent",
+					RunE: func(_ *Command, args []string) error {
+						return errors.New("some-error")
+					},
+				}
+			},
+		},
+		{
+			name:        "PostRunE",
+			expectedErr: errors.New("some-error"),
+			args:        []string{"parent"},
+			setup: func() *Command {
+				return &Command{
+					Use: "parent",
+					PostRunE: func(_ *Command, args []string) error {
+						return errors.New("some-error")
+					},
+					Run: nopRun,
+				}
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := executeCommand(tc.setup(), tc.args...)
+
+			if actual, expected := fmt.Sprint(err), fmt.Sprint(tc.expectedErr); expected != actual {
+				t.Fatalf("expected err %v, got %v", expected, actual)
+			}
+		})
 	}
 }
 
