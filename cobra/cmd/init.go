@@ -18,7 +18,7 @@ import (
 	"os"
 	"path"
 
-	"github.com/spf13/cobra"
+	"github.com/poy/cobra"
 	"github.com/spf13/viper"
 )
 
